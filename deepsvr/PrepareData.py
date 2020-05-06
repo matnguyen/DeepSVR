@@ -82,6 +82,12 @@ class PrepareData:
         for sample in self.samples:
             print('-----------------------------------------------------'
                   '\nStarting on sample {0}\n'.format(sample[0]))
+
+            unpaired = False
+            if sample[2] == 'N/A':
+                unpaired = True
+                print('Running unpaired mode\n')
+
             reviewer_specified_in_sample = sample[4] != ''
             sites_file_path = os.path.join(out_dir_path, sample[0] + '.sites')
             review = self._parse_review_file(sample[3], sites_file_path,
@@ -108,38 +114,42 @@ class PrepareData:
                                                           'tumor',
                                                           reviewer_in_bed_file,
                                                           int(sample[5]))
-            print('Processing normal bam file:\n\t{0}'.format(sample[2]))
-            normal_readcount_file_path = '{0}/{1}_normal' \
-                                         '.readcounts'.format(out_dir_path,
-                                                              sample[0])
-            if not skip_readcount:
-                os.system('bam-readcount -i -w 0 -l {0} -f {1} '
-                          '{2} > {3}'.format(sites_file_path, sample[6],
-                                             sample[2],
-                                             normal_readcount_file_path))
-            normal_rc = ReadCount(normal_readcount_file_path)
-            normal_data = normal_rc.\
-                compute_variant_metrics(bed_one_based_f_path, 'normal',
-                                        reviewer_in_bed_file, int(sample[5]))
-            if len(tumor_data) != len(normal_data):
-                raise ValueError(
-                    'Dataframes cannot be merged. They are differing lengths.')
-            if reviewer_in_bed_file:
-                individual_df = pd.merge(tumor_data, normal_data,
-                                         on=['chromosome', 'start', 'stop',
-                                             'ref', 'var', 'call',
-                                             'solid_tumor', 'reviewer'])
-            elif reviewer_specified_in_sample:
-                individual_df = pd.merge(tumor_data, normal_data,
-                                         on=['chromosome', 'start', 'stop',
-                                             'ref', 'var', 'call',
-                                             'solid_tumor'])
-                individual_df['reviewer'] = sample[4]
+            
+            if not unpaired:
+                print('Processing normal bam file:\n\t{0}'.format(sample[2]))
+                normal_readcount_file_path = '{0}/{1}_normal' \
+                                            '.readcounts'.format(out_dir_path,
+                                                                sample[0])
+                if not skip_readcount:
+                    os.system('bam-readcount -i -w 0 -l {0} -f {1} '
+                            '{2} > {3}'.format(sites_file_path, sample[6],
+                                                sample[2],
+                                                normal_readcount_file_path))
+                normal_rc = ReadCount(normal_readcount_file_path)
+                normal_data = normal_rc.\
+                    compute_variant_metrics(bed_one_based_f_path, 'normal',
+                                            reviewer_in_bed_file, int(sample[5]))
+                if len(tumor_data) != len(normal_data):
+                    raise ValueError(
+                        'Dataframes cannot be merged. They are differing lengths.')
+                if reviewer_in_bed_file:
+                    individual_df = pd.merge(tumor_data, normal_data,
+                                            on=['chromosome', 'start', 'stop',
+                                                'ref', 'var', 'call',
+                                                'solid_tumor', 'reviewer'])
+                elif reviewer_specified_in_sample:
+                    individual_df = pd.merge(tumor_data, normal_data,
+                                            on=['chromosome', 'start', 'stop',
+                                                'ref', 'var', 'call',
+                                                'solid_tumor'])
+                    individual_df['reviewer'] = sample[4]
+                else:
+                    individual_df = pd.merge(tumor_data, normal_data,
+                                            on=['chromosome', 'start', 'stop',
+                                                'ref', 'var', 'call',
+                                                'solid_tumor'])
             else:
-                individual_df = pd.merge(tumor_data, normal_data,
-                                         on=['chromosome', 'start', 'stop',
-                                             'ref', 'var', 'call',
-                                             'solid_tumor'])
+                individual_df = tumor_data
             try:
                 if ignore_reviewer:
                     individual_df.drop('reviewer', axis=1, inplace=True)
@@ -153,61 +163,90 @@ class PrepareData:
                                    individual_df['var'])
             self.training_data = pd.concat([self.training_data, individual_df])
 
-        self.training_data.drop(['chromosome', 'start', 'stop', 'ref', 'var'],
+        self.training_data.drop(['chromosome', 'start', 'stop'],
                                 axis=1, inplace=True)
         self.categorical_columns = self.categorical_columns + ['solid_tumor']
         if not ignore_reviewer and (reviewer_specified_in_sample or
                                     reviewer_in_bed_file):
             self._perform_one_hot_encoding('reviewer')
+        self._perform_one_hot_encoding('ref')
+        self._perform_one_hot_encoding('var')
         self.calls = self.training_data.pop('call')
 
         # normalize continuous variables
-        columns = ['normal_VAF', 'normal_depth', 'normal_other_bases_count',
-                   'normal_ref_avg_basequality',
-                   'normal_ref_avg_clipped_length',
-                   'normal_ref_avg_distance_to_effective_3p_end',
-                   'normal_ref_avg_distance_to_q2_start_in_q2_reads',
-                   'normal_ref_avg_mapping_quality',
-                   'normal_ref_avg_num_mismaches_as_fraction',
-                   'normal_ref_avg_pos_as_fraction',
-                   'normal_ref_avg_se_mapping_quality',
-                   'normal_ref_avg_sum_mismatch_qualities', 'normal_ref_count',
-                   'normal_ref_num_minus_strand', 'normal_ref_num_plus_strand',
-                   'normal_ref_num_q2_containing_reads',
-                   'normal_var_avg_basequality',
-                   'normal_var_avg_clipped_length',
-                   'normal_var_avg_distance_to_effective_3p_end',
-                   'normal_var_avg_distance_to_q2_start_in_q2_reads',
-                   'normal_var_avg_mapping_quality',
-                   'normal_var_avg_num_mismaches_as_fraction',
-                   'normal_var_avg_pos_as_fraction',
-                   'normal_var_avg_se_mapping_quality',
-                   'normal_var_avg_sum_mismatch_qualities', 'normal_var_count',
-                   'normal_var_num_minus_strand', 'normal_var_num_plus_strand',
-                   'normal_var_num_q2_containing_reads', 'tumor_VAF',
-                   'tumor_depth',
-                   'tumor_other_bases_count', 'tumor_ref_avg_basequality',
-                   'tumor_ref_avg_clipped_length',
-                   'tumor_ref_avg_distance_to_effective_3p_end',
-                   'tumor_ref_avg_distance_to_q2_start_in_q2_reads',
-                   'tumor_ref_avg_mapping_quality',
-                   'tumor_ref_avg_num_mismaches_as_fraction',
-                   'tumor_ref_avg_pos_as_fraction',
-                   'tumor_ref_avg_se_mapping_quality',
-                   'tumor_ref_avg_sum_mismatch_qualities', 'tumor_ref_count',
-                   'tumor_ref_num_minus_strand', 'tumor_ref_num_plus_strand',
-                   'tumor_ref_num_q2_containing_reads',
-                   'tumor_var_avg_basequality',
-                   'tumor_var_avg_clipped_length',
-                   'tumor_var_avg_distance_to_effective_3p_end',
-                   'tumor_var_avg_distance_to_q2_start_in_q2_reads',
-                   'tumor_var_avg_mapping_quality',
-                   'tumor_var_avg_num_mismaches_as_fraction',
-                   'tumor_var_avg_pos_as_fraction',
-                   'tumor_var_avg_se_mapping_quality',
-                   'tumor_var_avg_sum_mismatch_qualities', 'tumor_var_count',
-                   'tumor_var_num_minus_strand', 'tumor_var_num_plus_strand',
-                   'tumor_var_num_q2_containing_reads']
+        if unpaired:
+            columns = ['tumor_VAF',
+                       'tumor_depth',
+                       'tumor_other_bases_count', 'tumor_ref_avg_basequality',
+                       'tumor_ref_avg_clipped_length',
+                       'tumor_ref_avg_distance_to_effective_3p_end',
+                       'tumor_ref_avg_distance_to_q2_start_in_q2_reads',
+                       'tumor_ref_avg_mapping_quality',
+                       'tumor_ref_avg_num_mismaches_as_fraction',
+                       'tumor_ref_avg_pos_as_fraction',
+                       'tumor_ref_avg_se_mapping_quality',
+                       'tumor_ref_avg_sum_mismatch_qualities', 'tumor_ref_count',
+                       'tumor_ref_num_minus_strand', 'tumor_ref_num_plus_strand',
+                       'tumor_ref_num_q2_containing_reads',
+                       'tumor_var_avg_basequality',
+                       'tumor_var_avg_clipped_length',
+                       'tumor_var_avg_distance_to_effective_3p_end',
+                       'tumor_var_avg_distance_to_q2_start_in_q2_reads',
+                       'tumor_var_avg_mapping_quality',
+                       'tumor_var_avg_num_mismaches_as_fraction',
+                       'tumor_var_avg_pos_as_fraction',
+                       'tumor_var_avg_se_mapping_quality',
+                       'tumor_var_avg_sum_mismatch_qualities', 'tumor_var_count',
+                       'tumor_var_num_minus_strand', 'tumor_var_num_plus_strand',
+                       'tumor_var_num_q2_containing_reads']
+        else:
+            columns = ['normal_VAF', 'normal_depth', 'normal_other_bases_count',
+                       'normal_ref_avg_basequality',
+                       'normal_ref_avg_clipped_length',
+                       'normal_ref_avg_distance_to_effective_3p_end',
+                       'normal_ref_avg_distance_to_q2_start_in_q2_reads',
+                       'normal_ref_avg_mapping_quality',
+                       'normal_ref_avg_num_mismaches_as_fraction',
+                       'normal_ref_avg_pos_as_fraction',
+                       'normal_ref_avg_se_mapping_quality',
+                       'normal_ref_avg_sum_mismatch_qualities', 'normal_ref_count',
+                       'normal_ref_num_minus_strand', 'normal_ref_num_plus_strand',
+                       'normal_ref_num_q2_containing_reads',
+                       'normal_var_avg_basequality',
+                       'normal_var_avg_clipped_length',
+                       'normal_var_avg_distance_to_effective_3p_end',
+                       'normal_var_avg_distance_to_q2_start_in_q2_reads',
+                       'normal_var_avg_mapping_quality',
+                       'normal_var_avg_num_mismaches_as_fraction',
+                       'normal_var_avg_pos_as_fraction',
+                       'normal_var_avg_se_mapping_quality',
+                       'normal_var_avg_sum_mismatch_qualities', 'normal_var_count',
+                       'normal_var_num_minus_strand', 'normal_var_num_plus_strand',
+                       'normal_var_num_q2_containing_reads', 'tumor_VAF',
+                       'tumor_depth',
+                       'tumor_other_bases_count', 'tumor_ref_avg_basequality',
+                       'tumor_ref_avg_clipped_length',
+                       'tumor_ref_avg_distance_to_effective_3p_end',
+                       'tumor_ref_avg_distance_to_q2_start_in_q2_reads',
+                       'tumor_ref_avg_mapping_quality',
+                       'tumor_ref_avg_num_mismaches_as_fraction',
+                       'tumor_ref_avg_pos_as_fraction',
+                       'tumor_ref_avg_se_mapping_quality',
+                       'tumor_ref_avg_sum_mismatch_qualities', 'tumor_ref_count',
+                       'tumor_ref_num_minus_strand', 'tumor_ref_num_plus_strand',
+                       'tumor_ref_num_q2_containing_reads',
+                       'tumor_var_avg_basequality',
+                       'tumor_var_avg_clipped_length',
+                       'tumor_var_avg_distance_to_effective_3p_end',
+                       'tumor_var_avg_distance_to_q2_start_in_q2_reads',
+                       'tumor_var_avg_mapping_quality',
+                       'tumor_var_avg_num_mismaches_as_fraction',
+                       'tumor_var_avg_pos_as_fraction',
+                       'tumor_var_avg_se_mapping_quality',
+                       'tumor_var_avg_sum_mismatch_qualities', 'tumor_var_count',
+                       'tumor_var_num_minus_strand', 'tumor_var_num_plus_strand',
+                       'tumor_var_num_q2_containing_reads']
+                       
         to_normalize = self.training_data[columns]
         # Source http://stackoverflow.com/a/26415620
         x = to_normalize.values
@@ -215,6 +254,7 @@ class PrepareData:
         x_scaled = min_max_scaler.fit_transform(x)
         scaled = pd.DataFrame(x_scaled, index=self.training_data.index,
                               columns=columns)
+
         self.training_data = pd.concat(
             [self.training_data[self.categorical_columns], scaled], axis=1)
         self.training_data.to_pickle(
@@ -258,8 +298,10 @@ class PrepareData:
                                           'call, and reviewer(optional). The '
                                           'following value was passed: ',
                              e.args[0])
+        header = manual_review.columns
         manual_review = manual_review.apply(self._convert_one_based, axis=1)
         manual_review = manual_review.replace('', np.nan).dropna(how='all')
+        manual_review.columns = header
         manual_review[['chromosome', 'start', 'stop']].to_csv(sites_file_path,
                                                               sep='\t',
                                                               index=False,
@@ -269,5 +311,5 @@ class PrepareData:
         return manual_review
 
     def _convert_one_based(self, row):
-        return convert.coordinate_system('\t'.join(map(str, row.values)),
-                                         'to_one_based').strip().split('\t')
+        return pd.Series(convert.coordinate_system('\t'.join(map(str, row.values)),
+                                                  'to_one_based').strip().split('\t'))
