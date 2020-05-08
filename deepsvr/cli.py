@@ -47,12 +47,15 @@ def main():
               help='Specify output directory: Readcount files and compressed '
                    'pandas dataframe will be output here '
                    '(default:~/training_data)')
+@click.option('--reference', '-r', 
+              help='Location of reference genome FASTA')
 def prepare_data(header, skip_bam_readcount,
-                 samples_file_path, output_dir_path):
+                 samples_file_path, output_dir_path, reference):
     """
     Prepare data for training or classification.
     """
-    PrepareData(samples_file_path, header, output_dir_path, skip_bam_readcount)
+    PrepareData(samples_file_path, header, output_dir_path, skip_bam_readcount, 
+                reference)
 
 
 @main.command()

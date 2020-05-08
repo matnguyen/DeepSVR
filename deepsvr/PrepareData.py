@@ -2,6 +2,8 @@ import os
 
 import numpy as np
 import pandas as pd
+import pysam
+import itertools
 from sklearn import preprocessing
 from zero_one_based_conversion import convert
 
@@ -16,7 +18,7 @@ class PrepareData:
     """
 
     def __init__(self, samples_file_path, header, out_dir_path,
-                 skip_readcount, ignore_reviewer=True):
+                 skip_readcount, reference, ignore_reviewer=True):
         """Assemble pandas.Dataframe of data
 
             Args:
@@ -41,6 +43,9 @@ class PrepareData:
         self.out_dir_path = out_dir_path
         self.training_data = pd.DataFrame()
         self.categorical_columns = list()
+        self.reference = pysam.FastaFile(reference)
+        self.trinuc_context = [''.join(i) for i in 
+                               itertools.product(['A', 'T', 'C', 'G'], repeat=3)]
         self._run_bam_readcount(skip_readcount, ignore_reviewer)
 
     def _parse_samples_file(self, samples_file_path, header):
@@ -162,10 +167,15 @@ class PrepareData:
                                    individual_df.ref + '>' +
                                    individual_df['var'])
             self.training_data = pd.concat([self.training_data, individual_df])
-
+            for trinuc_context in self.trinuc_context:
+                self.training_data[trinuc_context] = 0
+            self.training_data = self.training_data.apply(self._determine_trinucleotide_context, axis=1)
+        import pdb
+        pdb.set_trace()
         self.training_data.drop(['chromosome', 'start', 'stop'],
                                 axis=1, inplace=True)
         self.categorical_columns = self.categorical_columns + ['solid_tumor']
+        self.categorical_columns = self.categorical_columns + self.trinuc_context
         if not ignore_reviewer and (reviewer_specified_in_sample or
                                     reviewer_in_bed_file):
             self._perform_one_hot_encoding('reviewer')
@@ -309,6 +319,13 @@ class PrepareData:
         manual_review.to_csv(manual_review_file_path+'.one_based',
                              sep='\t', index=False, header=True)
         return manual_review
+    
+    def _determine_trinucleotide_context(self, row):
+        context = self.reference.fetch(reference=row.chromosome, start=row.start - 2,
+                                       end=row.stop + 1)
+        context = context[:1] + row['var'] + context[2:]
+        row[context] = 1
+        return row
 
     def _convert_one_based(self, row):
         return pd.Series(convert.coordinate_system('\t'.join(map(str, row.values)),
